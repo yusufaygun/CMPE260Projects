@@ -1,0 +1,170 @@
+#lang racket
+
+(require rackunit)
+
+; Recursive factorial function
+(define (factorial n)
+  (if (<= n 1)
+      1
+      (* n (factorial (- n 1)))))
+
+; Helper Function for Padding
+(define (pad-left str length pad-char)
+  (if (< (string-length str) length)
+      (string-append (make-string (- length (string-length str)) pad-char) str)
+      str))
+
+
+; Function implementations
+(define (binary_to_decimal binary)
+  (string->number binary 2))
+
+(define (relocator args limit base)
+  (map (lambda (addr)
+         (let ([decimal (binary_to_decimal addr)])
+           (if (> decimal limit)
+               -1
+               (+ decimal base))))
+       args))
+
+(define (divide_address_space num page_size)
+  (let* ([decimal-num (binary_to_decimal num)]
+         [page-size-in-bits (* page_size 1024)]
+         [page-num-decimal (quotient decimal-num page-size-in-bits)]
+         [page-num-binary (number->string page-num-decimal 2)]
+         [offset-decimal (- decimal-num (* page-num-decimal page-size-in-bits))]
+         [offset-binary (number->string offset-decimal 2)]
+         [offset-length (exact-ceiling (/ (log page-size-in-bits) (log 2)))]
+         [padded-offset (pad-left offset-binary offset-length #\0)])
+    ;(printf "num: ~a, decimal-num: ~a, page-size-in-bits: ~a, page-num-decimal: ~a, page-num-binary: ~a, offset-decimal: ~a, offset-binary: ~a, padded-offset: ~a\n"
+            ;num decimal-num page-size-in-bits page-num-decimal page-num-binary offset-decimal offset-binary padded-offset)
+    (list page-num-binary padded-offset)))
+
+
+
+
+
+
+(define (page args page-table page-size)
+  (let* ([n (string-length (number->string (sub1 (length page-table)) 2))])
+    ;(printf "page-table length: ~a, n: ~a\n" (length page-table) n)
+    (map (lambda (addr)
+           (let* ([page-number (substring addr 0 n)]
+                  [page-offset (substring addr n)]
+                  [m (string->number page-number 2)]
+                  [new-page-number (list-ref page-table m)])
+             ;(printf "addr: ~a, page-number: ~a, page-offset: ~a, m: ~a, new-page-number: ~a\n"
+                     ;addr page-number page-offset m new-page-number)
+             (string-append new-page-number page-offset)))
+         args)))
+
+(define (find_sin value num)
+  (let* ([radians (degrees->radians value)]
+         [terms (map (lambda (n)
+                       (/ (* (expt -1 n) (expt radians (+ (* 2 n) 1)))
+                          (factorial (+ (* 2 n) 1))))
+                     (range 0 num))])
+    (apply + terms)))
+
+
+(define (myhash arg table-size)
+  (let* ([decimal (binary_to_decimal arg)]
+         [sin-value (find_sin decimal (+ (modulo decimal 5) 1))]
+         [sin-string (number->string sin-value)]
+         [dot-pos (regexp-match-positions #rx"[.]" sin-string)]
+         [dot-index (if dot-pos (caar dot-pos) (string-length sin-string))]
+         [start (+ dot-index 1)]
+         [end (+ start 10)]
+         [sin-substring (substring sin-string start end)]
+         [sin-digits (map (lambda (digit)
+                            (string->number (string digit)))
+                          (string->list sin-substring))]
+         [sum (apply + sin-digits)])
+    ;(printf "arg: ~a, decimal: ~a, sin-value: ~a, sin-string: ~a, dot-index: ~a, sin-substring: ~a, sin-digits: ~a, sum: ~a\n"
+            ;arg decimal sin-value sin-string dot-index sin-substring sin-digits sum)
+    (modulo sum table-size)))
+
+
+(define (hashed_page arg table-size page-table page-size)
+  (let* ([split-addr (divide_address_space arg page-size)]
+         [page-num (first split-addr)]
+         [offset (second split-addr)]
+         [hash-index (myhash page-num table-size)]
+         [page-frame (list-ref page-table hash-index)]
+         [assoc-result (assoc page-num page-frame)])
+    (printf "arg: ~a, split-addr: ~a, page-num: ~a, offset: ~a, hash-index: ~a, page-frame: ~a, assoc-result: ~a\n"
+            arg split-addr page-num offset hash-index page-frame assoc-result)
+    (if assoc-result
+        (string-append (cdr assoc-result) offset)
+        #f)))
+
+
+(define (split_addresses args size)
+  (let loop ([stream args]
+             [result '()])
+    (if (< (string-length stream) size)
+        (reverse result)
+        (loop (substring stream size) (cons (substring stream 0 size) result)))))
+
+(define (map_addresses args table-size page-table page-size address-space-size)
+  (let* ([addresses (split_addresses args address-space-size)]
+         [physical-addresses (map (lambda (addr)
+                                    (hashed_page addr table-size page-table page-size))
+                                  addresses)])
+    physical-addresses))
+
+; Test cases
+(define (test-binary_to_decimal)
+  (check-equal? (binary_to_decimal "100101") 37)
+  (check-equal? (binary_to_decimal "11111101000") 2024))
+
+(define (test-relocator)
+  (check-equal? (relocator '("000010100111" "010000110001" "100100111101" "100110010001" "101111011000") 3500 1200)
+                '(1367 2273 3565 3649 4232))
+  (check-equal? (relocator '("0010010110001000" "1011111000100111" "0101010100000101" "0101011101001111") 25000 400)
+                '(10008 -1 22165 22751)))
+
+(define (test-divide_address_space)
+  (check-equal? (divide_address_space "11011011011000" 4) '("11" "011011011000"))
+  (check-equal? (divide_address_space "1111101010110000000000" 512) '("111" "1101010110000000000"))
+  (check-equal? (divide_address_space "10110111010010000011101110011011" 256) '("10110111010010" "000011101110011011")))
+
+(define (test-page)
+  (check-equal? (page '("110010111011001" "000001111111010" "010001100000100" "101001011011101") 
+                      '("100" "000" "010" "110" "011" "001" "111" "101") 4)
+                '("111010111011001" "100001111111010" "010001100000100" "001001011011101"))
+  (check-equal? (page '("01101000101111110") 
+                      '("11" "00" "10" "01") 32)
+                '("00101000101111110")))
+
+(define (test-find_sin)
+  (check-equal? (find_sin 45 5) 0.7071067829368671)
+  (check-equal? (find_sin 30 2) 0.49967417939436376))
+
+(define (test-myhash)
+  (check-equal? (myhash "1101" 8) 3)
+  (check-equal? (myhash "0110101" 12) 11))
+
+(define (test-hashed_page)
+  (check-equal? (hashed_page "010010111111101" 3 '(("01" . "000") ("11" . "010") ("10" . "111")) 8) "0000010111111101")
+  (check-equal? (hashed_page "0101111101011001" 5 '(("1101" . "010") ("0111" . "111") ("0101" . "000") ("1100" . "101") ("1001" . "100") ("0110" . "110") ("0010" . "001")) 4) "000111101011001"))
+
+(define (test-split_addresses)
+  (check-equal? (split_addresses "1110110101000000100100101011000101110011" 8) '("11101101" "01000000" "10010010" "10110001" "01110011"))
+  (check-equal? (split_addresses "10101110101111010010101011111101" 16) '("1010111010111101" "0010101011111101"))
+  (check-equal? (split_addresses "011110001101" 4) '("0111" "1000" "1101")))
+
+(define (test-map_addresses)
+  (check-equal? (map_addresses "001010000011001011000010100000011001011101001010" 5 '(("1101" . "010") ("0111" . "111") ("0101" . "000") ("1100" . "101") ("1001" . "100") ("0110" . "110") ("0010" . "001")) 4 16)
+                '("001100000110010" "101001010000001" "100011101001010")))
+
+; Run all tests
+(test-binary_to_decimal)
+(test-relocator)
+(test-divide_address_space)
+(test-page)
+(test-find_sin)
+(test-myhash)
+;(test-hashed_page)
+(test-split_addresses)
+;(test-map_addresses)
